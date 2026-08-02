@@ -15,7 +15,7 @@ pub struct WgpuState {
     surface_configuration: wgpu::SurfaceConfiguration,
 
     wallpaper_renderer: WallpaperRenderer,
-    animation_renderer: AnimationRenderer
+    animation_renderer: AnimationRenderer,
 }
 
 impl WgpuState {
@@ -33,7 +33,16 @@ impl WgpuState {
             .context("[WgpuState::new] in request_adapter")?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: adapter
+                    .features()
+                    .intersection(wgpu::Features::VERTEX_WRITABLE_STORAGE),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .unwrap();
 
@@ -55,7 +64,7 @@ impl WgpuState {
         };
 
         let wallpaper_renderer = WallpaperRenderer::new(&device, &queue, &surface_configuration)?;
-        let animation_renderer = AnimationRenderer::new(&device, &queue, &surface_configuration)?;
+        let animation_renderer = AnimationRenderer::new(&device, &surface_configuration)?;
 
         Ok(Self {
             instance,
@@ -85,12 +94,22 @@ impl WgpuState {
         if width > 0 && height > 0 {
             self.surface_configuration.width = width;
             self.surface_configuration.height = height;
-            self.surface.configure(&self.device, &self.surface_configuration);
+            self.surface
+                .configure(&self.device, &self.surface_configuration);
         }
     }
 
     pub fn update_mouse_position(&mut self, x: f32, y: f32) {
-        self.animation_renderer.update_mouse_position(&self.queue, x, y);
+        self.animation_renderer
+            .update_mouse_position(&self.queue, x, y);
+    }
+
+    pub fn mark_mouse_activity(&mut self) {
+        self.animation_renderer.mark_mouse_activity();
+    }
+
+    pub fn mouse_left(&mut self) {
+        self.animation_renderer.mouse_left();
     }
 
     pub fn render(&mut self) {
@@ -105,6 +124,9 @@ impl WgpuState {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
+
+        self.animation_renderer.render(&mut encoder, &self.queue);
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -123,11 +145,10 @@ impl WgpuState {
         });
 
         self.wallpaper_renderer.render(&mut render_pass);
-        self.animation_renderer.render(&mut render_pass, &self.queue);
+        self.animation_renderer.render_pass(&mut render_pass);
 
         drop(render_pass);
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_texture);
     }
 }
-

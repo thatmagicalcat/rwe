@@ -42,13 +42,35 @@ fn main() {
         }) => {
             state.resize(width, height);
             state.render();
+            ev.request_refresh_all(RefreshRequest::NextFrame);
 
             ReturnData::None
         }
 
-        LayerShellEvent::RequestMessages(DispatchMessage::MouseButton { .. }) => ReturnData::None,
-        LayerShellEvent::RequestMessages(DispatchMessage::MouseEnter { pointer, .. }) => {
+        LayerShellEvent::RequestMessages(DispatchMessage::MouseButton { .. }) => {
+            state.mark_mouse_activity();
+            ev.request_refresh_all(RefreshRequest::NextFrame);
+
+            ReturnData::None
+        }
+
+        LayerShellEvent::RequestMessages(DispatchMessage::MouseEnter {
+            pointer,
+            surface_x,
+            surface_y,
+            ..
+        }) => {
+            state.update_mouse_position(*surface_x as _, *surface_y as _);
+            ev.request_refresh_all(RefreshRequest::NextFrame);
+
             ReturnData::RequestSetCursorShape(("crosshair".to_owned(), pointer.clone()))
+        }
+
+        LayerShellEvent::RequestMessages(DispatchMessage::MouseLeave) => {
+            state.mouse_left();
+            ev.request_refresh_all(RefreshRequest::NextFrame);
+
+            ReturnData::None
         }
 
         LayerShellEvent::RequestMessages(&DispatchMessage::MouseMotion {
@@ -58,6 +80,14 @@ fn main() {
         }) => {
             state.update_mouse_position(x as _, y as _);
             ev.request_refresh_all(RefreshRequest::NextFrame);
+
+            ReturnData::None
+        }
+
+        LayerShellEvent::RequestMessages(DispatchMessage::Axis { .. }) => {
+            state.mark_mouse_activity();
+            ev.request_refresh_all(RefreshRequest::NextFrame);
+
             ReturnData::None
         }
 

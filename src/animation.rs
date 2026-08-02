@@ -9,41 +9,53 @@ const WAVEFRONT_FACTOR: f32 = 5.0;
 const MAX_DELAY: f32 = 2.0;
 const ANIM_TIME: f32 = 0.3;
 const TRIANGLE_SIZE: f32 = 140.0;
-const RADIUS: f32 = 400.0;
+const RADIUS: f32 = 300.0;
+
+const IDLE_TIMEOUT: f32 = 0.3;
+const FADE_IN_TIME: f32 = 0.4;
+const FADE_OUT_TIME: f32 = 2.0;
+const MAX_DT: f32 = 0.1;
 
 pub struct AnimationRenderer {
     uniforms: Uniforms,
     bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
+    compute_pipeline: wgpu::ComputePipeline,
     storage_buffer: wgpu::Buffer,
+    state_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     num_triangles: u32,
-    start_time: Instant,
+    last_frame: Instant,
+    last_mouse_activity: Instant,
+    mouse_active: bool,
+    fade: f32,
 }
 
 impl AnimationRenderer {
     pub fn new(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         surface_cfg: &wgpu::SurfaceConfiguration,
     ) -> anyhow::Result<Self> {
         let &wgpu::wgt::SurfaceConfiguration { width, height, .. } = surface_cfg;
 
         let delay_spread = MAX_DELAY.max(ANIM_TIME * WAVEFRONT_FACTOR);
         let (gpu_triangles, max_distance) = build_triangles(width as _, height as _, TRIANGLE_SIZE);
+        let num_triangles = gpu_triangles.len() as u32;
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shader/animation.wgsl"));
+        let shader_module =
+            device.create_shader_module(wgpu::include_wgsl!("shader/animation.wgsl"));
 
         let uniforms = Uniforms {
             screen_size: [width as _, height as _],
-            time: 0.0,
+            dt: 0.0,
             anim_time: ANIM_TIME,
             delay_spread,
             max_distance,
             cursor: [width as f32 / 2.0, height as f32 / 2.0],
             radius: RADIUS,
-            mode: 2,
-            _pad: [0.0; _],
+            num_triangles,
+            fade: 0.0,
+            _pad: 0.0,
             colors: PaletteName::Ember
                 .colors()
                 .map(|i| i.map(|i| i as f32 / 255.0)),
@@ -58,7 +70,13 @@ impl AnimationRenderer {
         let storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("storage buffer"),
             contents: bytemuck::cast_slice(&gpu_triangles),
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("triangle state buffer"),
+            contents: bytemuck::cast_slice(&vec![TriangleState::zeroed(); gpu_triangles.len()]),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -66,7 +84,7 @@ impl AnimationRenderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
                     count: None,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -78,10 +96,20 @@ impl AnimationRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
                     count: None,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
+                    count: None,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -101,6 +129,10 @@ impl AnimationRenderer {
                     binding: 1,
                     resource: storage_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: state_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -110,17 +142,26 @@ impl AnimationRenderer {
             immediate_size: 0,
         });
 
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("compute pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader_module,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &shader_module,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &shader_module,
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -148,15 +189,23 @@ impl AnimationRenderer {
             uniforms,
             bind_group,
             render_pipeline,
+            compute_pipeline,
             storage_buffer,
+            state_buffer,
             uniform_buffer,
-            num_triangles: gpu_triangles.len() as _,
-            start_time: Instant::now(),
+            num_triangles,
+            last_frame: Instant::now(),
+            last_mouse_activity: Instant::now(),
+            mouse_active: false,
+            fade: 0.0,
         })
     }
 
     pub fn update_mouse_position(&mut self, queue: &wgpu::Queue, x: f32, y: f32) {
         self.uniforms.cursor = [x, y];
+        self.mouse_active = true;
+        self.last_mouse_activity = Instant::now();
+
         queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -164,14 +213,63 @@ impl AnimationRenderer {
         );
     }
 
-    pub fn render(&mut self, render_pass: &mut wgpu::RenderPass, queue: &wgpu::Queue) {
-        self.uniforms.time = self.start_time.elapsed().as_secs_f32();
+    pub fn mark_mouse_activity(&mut self) {
+        self.mouse_active = true;
+        self.last_mouse_activity = Instant::now();
+    }
+
+    pub fn mouse_left(&mut self) {
+        self.mouse_active = false;
+    }
+
+    pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        let now = Instant::now();
+        let dt = now
+            .duration_since(self.last_frame)
+            .as_secs_f32()
+            .clamp(0.0, MAX_DT);
+        self.last_frame = now;
+
+        let idle = now.duration_since(self.last_mouse_activity).as_secs_f32();
+        let target_fade = if self.mouse_active && idle < IDLE_TIMEOUT {
+            1.0
+        } else {
+            0.0
+        };
+
+        let fade_time = if target_fade >= self.fade {
+            FADE_IN_TIME
+        } else {
+            FADE_OUT_TIME
+        };
+
+        let k = 1.0 - (-dt / fade_time).exp();
+        self.fade += (target_fade - self.fade) * k;
+        if self.fade < 0.001 {
+            self.fade = 0.0;
+        }
+
+        self.uniforms.dt = dt;
+        self.uniforms.fade = self.fade;
         queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::cast_slice(&[self.uniforms]),
         );
 
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("animation compute pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.compute_pipeline);
+        compute_pass.set_bind_group(0, &self.bind_group, &[]);
+        compute_pass.dispatch_workgroups(self.num_triangles.div_ceil(64), 1, 1);
+
+        drop(compute_pass);
+    }
+
+    pub fn render_pass(&self, render_pass: &mut wgpu::RenderPass) {
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.draw(0..3, 0..self.num_triangles);
@@ -249,14 +347,15 @@ fn build_triangles(w: f32, h: f32, side_length: f32) -> (Vec<GpuTriangle>, f32) 
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
     screen_size: [f32; 2],
-    time: f32,
+    dt: f32,
     anim_time: f32,
     delay_spread: f32,
     max_distance: f32,
     cursor: [f32; 2],
     radius: f32,
-    mode: u32,
-    _pad: [f32; 2],
+    num_triangles: u32,
+    fade: f32,
+    _pad: f32,
     colors: [[f32; 4]; 4],
 }
 
@@ -269,6 +368,12 @@ struct GpuTriangle {
     a_start: Vec2,
     distance: f32,
     palette_index: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct TriangleState {
+    t: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
