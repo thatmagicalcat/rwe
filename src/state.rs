@@ -5,7 +5,7 @@ use wgpu::rwh::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use layershellev::WindowStateUnit;
 
-use crate::wallpaper::WallpaperRenderer;
+use crate::{animation::AnimationRenderer, wallpaper::WallpaperRenderer};
 
 pub struct WgpuState {
     instance: wgpu::Instance,
@@ -15,6 +15,7 @@ pub struct WgpuState {
     surface_configuration: wgpu::SurfaceConfiguration,
 
     wallpaper_renderer: WallpaperRenderer,
+    animation_renderer: AnimationRenderer
 }
 
 impl WgpuState {
@@ -36,13 +37,16 @@ impl WgpuState {
             .await
             .unwrap();
 
-        let (width, height) = window.get_size();
+        // FIXME: move animation renderer's triangle generation code to `resize` function so we
+        // won't have to hardcode width and height here
+
+        // let (width, height) = window.get_size();
         let caps = surface.get_capabilities(&adapter);
         let surface_configuration = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: caps.formats[0],
-            width,
-            height,
+            width: 1920,
+            height: 1080,
             present_mode: wgpu::PresentMode::Fifo, // V-Sync locked
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -51,6 +55,7 @@ impl WgpuState {
         };
 
         let wallpaper_renderer = WallpaperRenderer::new(&device, &queue, &surface_configuration)?;
+        let animation_renderer = AnimationRenderer::new(&device, &queue, &surface_configuration)?;
 
         Ok(Self {
             instance,
@@ -59,6 +64,7 @@ impl WgpuState {
             queue,
             surface_configuration,
             wallpaper_renderer,
+            animation_renderer,
         })
     }
 
@@ -81,6 +87,10 @@ impl WgpuState {
             self.surface_configuration.height = height;
             self.surface.configure(&self.device, &self.surface_configuration);
         }
+    }
+
+    pub fn update_mouse_position(&mut self, x: f32, y: f32) {
+        self.animation_renderer.update_mouse_position(&self.queue, x, y);
     }
 
     pub fn render(&mut self) {
@@ -113,6 +123,7 @@ impl WgpuState {
         });
 
         self.wallpaper_renderer.render(&mut render_pass);
+        self.animation_renderer.render(&mut render_pass, &self.queue);
 
         drop(render_pass);
         self.queue.submit([encoder.finish()]);

@@ -4,6 +4,7 @@ use layershellev::*;
 
 use state::WgpuState;
 
+mod animation;
 mod state;
 mod texture;
 mod wallpaper;
@@ -32,9 +33,7 @@ fn main() {
         LayerShellEvent::BindProvide(_, _) => ReturnData::RequestCompositor,
         LayerShellEvent::CompositorProvide(_, _) => ReturnData::None,
 
-        LayerShellEvent::NormalDispatch => {
-            ReturnData::None
-        }
+        LayerShellEvent::NormalDispatch => ReturnData::None,
 
         LayerShellEvent::RequestMessages(&DispatchMessage::RequestRefresh {
             width,
@@ -53,12 +52,11 @@ fn main() {
         }
 
         LayerShellEvent::RequestMessages(&DispatchMessage::MouseMotion {
-            time,
-            surface_x,
-            surface_y,
+            time: _,
+            surface_x: x,
+            surface_y: y,
         }) => {
-            println!("{time}, {surface_x}, {surface_y}");
-            mouse_pos = (surface_x, surface_y);
+            state.update_mouse_position(x as _, y as _);
             ev.request_refresh_all(RefreshRequest::NextFrame);
             ReturnData::None
         }
