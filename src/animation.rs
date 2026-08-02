@@ -13,7 +13,7 @@ const RADIUS: f32 = 300.0;
 
 const IDLE_TIMEOUT: f32 = 0.3;
 const FADE_IN_TIME: f32 = 0.4;
-const FADE_OUT_TIME: f32 = 2.0;
+const FADE_OUT_TIME: f32 = 1.0;
 const MAX_DT: f32 = 0.1;
 
 pub struct AnimationRenderer {
@@ -222,6 +222,11 @@ impl AnimationRenderer {
         self.mouse_active = false;
     }
 
+    pub fn is_active(&self) -> bool {
+        let idle = self.last_mouse_activity.elapsed().as_secs_f32();
+        self.fade > 0.0 || (self.mouse_active && idle < IDLE_TIMEOUT)
+    }
+
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
         let now = Instant::now();
         let dt = now
@@ -257,16 +262,18 @@ impl AnimationRenderer {
             bytemuck::cast_slice(&[self.uniforms]),
         );
 
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("animation compute pass"),
-            timestamp_writes: None,
-        });
+        if self.is_active() {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("animation compute pass"),
+                timestamp_writes: None,
+            });
 
-        compute_pass.set_pipeline(&self.compute_pipeline);
-        compute_pass.set_bind_group(0, &self.bind_group, &[]);
-        compute_pass.dispatch_workgroups(self.num_triangles.div_ceil(64), 1, 1);
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.bind_group, &[]);
+            compute_pass.dispatch_workgroups(self.num_triangles.div_ceil(64), 1, 1);
 
-        drop(compute_pass);
+            drop(compute_pass);
+        }
     }
 
     pub fn render_pass(&self, render_pass: &mut wgpu::RenderPass) {

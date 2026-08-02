@@ -112,10 +112,12 @@ impl WgpuState {
         self.animation_renderer.mouse_left();
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self) -> bool {
         let surface_texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => return,
+            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
+                return true
+            }
             e => panic!("{e:?}"), // TODO: handle other cases
         };
 
@@ -150,5 +152,7 @@ impl WgpuState {
         drop(render_pass);
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_texture);
+
+        self.animation_renderer.is_active()
     }
 }

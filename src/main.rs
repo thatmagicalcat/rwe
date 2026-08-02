@@ -41,8 +41,9 @@ fn main() {
             ..
         }) => {
             state.resize(width, height);
-            state.render();
-            ev.request_refresh_all(RefreshRequest::NextFrame);
+            if state.render() {
+                ev.request_refresh_all(RefreshRequest::NextFrame);
+            }
 
             ReturnData::None
         }
