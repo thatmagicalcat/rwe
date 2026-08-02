@@ -5,12 +5,16 @@ use wgpu::rwh::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use layershellev::WindowStateUnit;
 
+use crate::wallpaper::WallpaperRenderer;
+
 pub struct WgpuState {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    surface_configuration: wgpu::SurfaceConfiguration,
+
+    wallpaper_renderer: WallpaperRenderer,
 }
 
 impl WgpuState {
@@ -34,7 +38,7 @@ impl WgpuState {
 
         let (width, height) = window.get_size();
         let caps = surface.get_capabilities(&adapter);
-        let config = wgpu::SurfaceConfiguration {
+        let surface_configuration = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: caps.formats[0],
             width,
@@ -46,12 +50,15 @@ impl WgpuState {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
+        let wallpaper_renderer = WallpaperRenderer::new(&device, &queue, &surface_configuration)?;
+
         Ok(Self {
             instance,
             surface,
             device,
             queue,
-            config,
+            surface_configuration,
+            wallpaper_renderer,
         })
     }
 
@@ -70,9 +77,9 @@ impl WgpuState {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+            self.surface_configuration.width = width;
+            self.surface_configuration.height = height;
+            self.surface.configure(&self.device, &self.surface_configuration);
         }
     }
 
@@ -88,7 +95,7 @@ impl WgpuState {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
@@ -105,8 +112,9 @@ impl WgpuState {
             multiview_mask: None,
         });
 
-        drop(render_pass);
+        self.wallpaper_renderer.render(&mut render_pass);
 
+        drop(render_pass);
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_texture);
     }

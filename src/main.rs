@@ -1,5 +1,3 @@
-use std::fs::File;
-
 use layershellev::keyboard::{KeyCode, PhysicalKey};
 use layershellev::reexport::*;
 use layershellev::*;
@@ -7,6 +5,8 @@ use layershellev::*;
 use state::WgpuState;
 
 mod state;
+mod texture;
+mod wallpaper;
 
 fn main() {
     let ev: WindowState<()> = WindowState::new("Interactive Wallpaper")
