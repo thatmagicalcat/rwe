@@ -1,0 +1,10 @@
+[package]
+name = "wayland-wall"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+layershellev = "0.19.1"
+pollster = "1.0.1"
+wgpu = { version = "30.0.0", default-features = false, features = ["vulkan", "wgsl"] }

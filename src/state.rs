@@ -1,0 +1,114 @@
+use anyhow::{Context, Result};
+
+#[allow(deprecated)]
+use wgpu::rwh::{HasRawDisplayHandle, HasRawWindowHandle};
+
+use layershellev::WindowStateUnit;
+
+pub struct WgpuState {
+    instance: wgpu::Instance,
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+}
+
+impl WgpuState {
+    pub async fn new(window: &WindowStateUnit<()>) -> Result<Self> {
+        let instance = wgpu::Instance::default();
+        let surface = Self::create_surface(&instance, window)?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            })
+            .await
+            .context("[WgpuState::new] in request_adapter")?;
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+
+        let (width, height) = window.get_size();
+        let caps = surface.get_capabilities(&adapter);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: caps.formats[0],
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo, // V-Sync locked
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+
+        Ok(Self {
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+        })
+    }
+
+    #[allow(deprecated)]
+    pub fn create_surface(
+        instance: &wgpu::Instance,
+        window: &WindowStateUnit<()>,
+    ) -> anyhow::Result<wgpu::Surface<'static>> {
+        Ok(unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(window.raw_display_handle()?),
+                raw_window_handle: window.raw_window_handle()?,
+            })?
+        })
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
+    pub fn render(&mut self) {
+        let surface_texture = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => return,
+            e => panic!("{e:?}"), // TODO: handle other cases
+        };
+
+        let texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &texture_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        drop(render_pass);
+
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(surface_texture);
+    }
+}
+
