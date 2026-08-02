@@ -12,8 +12,8 @@ const TRIANGLE_SIZE: f32 = 140.0;
 const RADIUS: f32 = 300.0;
 
 const IDLE_TIMEOUT: f32 = 0.3;
-const FADE_IN_TIME: f32 = 0.4;
-const FADE_OUT_TIME: f32 = 1.0;
+const FADE_IN_TIME: f32 = 0.9;
+const FADE_OUT_TIME: f32 = 0.9;
 const MAX_DT: f32 = 0.1;
 
 pub struct AnimationRenderer {
@@ -56,7 +56,7 @@ impl AnimationRenderer {
             num_triangles,
             fade: 0.0,
             _pad: 0.0,
-            colors: PaletteName::Ember
+            colors: PaletteName::Forest
                 .colors()
                 .map(|i| i.map(|i| i as f32 / 255.0)),
         };
